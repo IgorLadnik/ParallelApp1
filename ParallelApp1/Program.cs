@@ -19,13 +19,12 @@ namespace ParallelApp1
             Processor processor = new(msg =>
             {
                 //...
-                Thread.Sleep(2000);
+                Thread.Sleep(1000);
                 Console.WriteLine($"    MessageId = {msg.Id}, CurrentThread: {Thread.CurrentThread.ManagedThreadId}");
-            });
+            },
+            INIT_GRANTED_NUM);
+
             processor.EnqueueMessages(CreateMessages(0, 10).ToArray());
-
-            processor.Process(INIT_GRANTED_NUM);
-
             processor.EnqueueMessages(CreateMessages(10, 20).ToArray());
             processor.EnqueueMessages(new Message { Id = 21 });
 
@@ -49,20 +48,30 @@ namespace ParallelApp1
     {
         private ConcurrentQueue<Message> _cq = new();
         private Action<Message> _processMessage;
+        private int _grantedParallelNum;
+        private object _locker = new object();
 
-        public Processor(Action<Message> processMessage) =>
+        public Processor(Action<Message> processMessage, int grantedParallelNum)
+        {
             _processMessage = processMessage;
+            _grantedParallelNum = grantedParallelNum;
+        }
 
         public void EnqueueMessages(params Message[] messages)
         {
             foreach (var msg in messages)
                 _cq.Enqueue(msg);
+
+            Process();
         }
 
-        public void Process(int grantedParallel) =>
+        private void Process() =>
             Task.Run(async () =>
             {
-                using SemaphoreSlim sm = new(grantedParallel);
+                if (!Monitor.TryEnter(_locker))
+                    return;
+
+                using SemaphoreSlim sm = new(_grantedParallelNum);
                 ConcurrentBag<Task> tasks = new();
                 while (_cq.Any())
                 {
@@ -79,6 +88,8 @@ namespace ParallelApp1
                 }
 
                 Task.WaitAll(tasks.ToArray());
+
+                Monitor.Exit(_locker);
             });
     }
 }
