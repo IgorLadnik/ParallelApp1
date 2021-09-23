@@ -16,7 +16,6 @@ namespace ParallelApp1
 
         static async Task Main(string[] args)
         {
-            SemaphoreSlim sm = new(INIT_GRANTED_NUM);
             ConcurrentQueue<Message> cq = new();
 
             InitEnqueueMessages(cq);
