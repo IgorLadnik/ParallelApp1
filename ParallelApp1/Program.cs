@@ -2,11 +2,9 @@
 // Tasks limit is INIT_GRANTED_NUM.
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace ParallelApp1
 {
@@ -16,20 +14,22 @@ namespace ParallelApp1
 
         static void Main(string[] args)
         {
-            Processor<Message> processor = new(msg =>
-            {
-                //...
-                Thread.Sleep(100);
-                Console.WriteLine($"    MessageId = {msg.Id}, CurrentThread: {Thread.CurrentThread.ManagedThreadId}");
-            },
-            INIT_GRANTED_NUM);
+            Processor<Message> processor = new(
+                msg =>
+                {
+                    //...
+                    Thread.Sleep(100);
+                    Console.WriteLine($"    MessageId = {msg.Id}, CurrentThread: {Thread.CurrentThread.ManagedThreadId}");
+                },
+                n => Console.WriteLine($"{n} messages have been processed"),
+                INIT_GRANTED_NUM);
 
-            processor.EnqueueAndProcessMessages(CreateMessages(0, 10).ToArray());
-            processor.EnqueueAndProcessMessages(CreateMessages(10, 20).ToArray());
+            processor.EnqueueAndProcessMessages(CreateMessageArray(0, 10));
+            processor.EnqueueAndProcessMessages(CreateMessageArray(10, 20));
 
             Thread.Sleep(3000);
 
-            processor.EnqueueAndProcessMessages(CreateMessages(20, 30).ToArray());
+            processor.EnqueueAndProcessMessages(CreateMessageArray(20, 30));
             processor.EnqueueAndProcessMessages(new Message { Id = 31 });
 
             Console.WriteLine("Press any key to quit...");
@@ -38,71 +38,13 @@ namespace ParallelApp1
             processor.Dispose();
         }
 
+        static Message[] CreateMessageArray(int from, int to) =>
+            CreateMessages(from, to)?.ToArray();
+
         static IEnumerable<Message> CreateMessages(int from, int to) 
         {
             for (var i = from; i < to; i++)
                 yield return new() { Id = i + 1 };
         }
-    }
-
-    class Message
-    {
-        public int Id { init; get; }
-    }
-
-    class Processor<T> : IDisposable
-    {
-        private ConcurrentQueue<T> _cq = new();
-        private Action<T> _processMessage;
-        private int _grantedParallelNum;
-        private AutoResetEvent _ev = new AutoResetEvent(true);
-
-        public Processor(Action<T> processMessage, int grantedParallelNum)
-        {
-            _processMessage = processMessage;
-            _grantedParallelNum = grantedParallelNum;
-        }
-
-        public void EnqueueAndProcessMessages(params T[] messages)
-        {
-            foreach (var msg in messages)
-                _cq.Enqueue(msg);
-
-            Process();
-        }
-
-        private void Process()
-        {
-            if (!_ev.WaitOne(0))
-                return;
-
-            Task.Run(async () =>
-            {
-                Console.WriteLine("-> Processing ===================================");
-
-                using SemaphoreSlim sm = new(_grantedParallelNum);
-                ConcurrentBag<Task> tasks = new();
-                while (_cq.Any())
-                {
-                    await sm.WaitAsync();
-                    tasks.Add(Task.Run(() =>
-                    {
-                        Console.WriteLine($"Number of spare threads: {sm.CurrentCount}");
-
-                        if (_processMessage != null && _cq.TryDequeue(out T msg))
-                            _processMessage(msg);
-
-                        sm.Release(1);
-                    }));
-                }
-
-                Task.WaitAll(tasks.ToArray());
-
-                _ev.Set();
-            });
-        }
-
-        public void Dispose() =>
-            _ev.Dispose();
     }
 }
