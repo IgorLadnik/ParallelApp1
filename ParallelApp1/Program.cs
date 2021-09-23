@@ -16,20 +16,26 @@ namespace ParallelApp1
 
         static void Main(string[] args)
         {
-            Processor processor = new(msg =>
+            Processor<Message> processor = new(msg =>
             {
                 //...
-                Thread.Sleep(1000);
+                Thread.Sleep(100);
                 Console.WriteLine($"    MessageId = {msg.Id}, CurrentThread: {Thread.CurrentThread.ManagedThreadId}");
             },
             INIT_GRANTED_NUM);
 
-            processor.EnqueueMessages(CreateMessages(0, 10).ToArray());
-            processor.EnqueueMessages(CreateMessages(10, 20).ToArray());
-            processor.EnqueueMessages(new Message { Id = 21 });
+            processor.EnqueueAndProcessMessages(CreateMessages(0, 10).ToArray());
+            processor.EnqueueAndProcessMessages(CreateMessages(10, 20).ToArray());
+
+            Thread.Sleep(3000);
+
+            processor.EnqueueAndProcessMessages(CreateMessages(20, 30).ToArray());
+            processor.EnqueueAndProcessMessages(new Message { Id = 31 });
 
             Console.WriteLine("Press any key to quit...");
             Console.ReadKey();
+
+            processor.Dispose();
         }
 
         static IEnumerable<Message> CreateMessages(int from, int to) 
@@ -44,20 +50,20 @@ namespace ParallelApp1
         public int Id { init; get; }
     }
 
-    class Processor 
+    class Processor<T> : IDisposable
     {
-        private ConcurrentQueue<Message> _cq = new();
-        private Action<Message> _processMessage;
+        private ConcurrentQueue<T> _cq = new();
+        private Action<T> _processMessage;
         private int _grantedParallelNum;
-        private object _locker = new object();
+        private AutoResetEvent _ev = new AutoResetEvent(true);
 
-        public Processor(Action<Message> processMessage, int grantedParallelNum)
+        public Processor(Action<T> processMessage, int grantedParallelNum)
         {
             _processMessage = processMessage;
             _grantedParallelNum = grantedParallelNum;
         }
 
-        public void EnqueueMessages(params Message[] messages)
+        public void EnqueueAndProcessMessages(params T[] messages)
         {
             foreach (var msg in messages)
                 _cq.Enqueue(msg);
@@ -65,11 +71,14 @@ namespace ParallelApp1
             Process();
         }
 
-        private void Process() =>
+        private void Process()
+        {
+            if (!_ev.WaitOne(0))
+                return;
+
             Task.Run(async () =>
             {
-                if (!Monitor.TryEnter(_locker))
-                    return;
+                Console.WriteLine("-> Processing ===================================");
 
                 using SemaphoreSlim sm = new(_grantedParallelNum);
                 ConcurrentBag<Task> tasks = new();
@@ -80,7 +89,7 @@ namespace ParallelApp1
                     {
                         Console.WriteLine($"Number of spare threads: {sm.CurrentCount}");
 
-                        if (_processMessage != null && _cq.TryDequeue(out Message msg))
+                        if (_processMessage != null && _cq.TryDequeue(out T msg))
                             _processMessage(msg);
 
                         sm.Release(1);
@@ -89,7 +98,11 @@ namespace ParallelApp1
 
                 Task.WaitAll(tasks.ToArray());
 
-                Monitor.Exit(_locker);
+                _ev.Set();
             });
+        }
+
+        public void Dispose() =>
+            _ev.Dispose();
     }
 }
